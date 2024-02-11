@@ -5,6 +5,10 @@ local has_singbox = api.finded_com("singbox")
 local has_xray = api.finded_com("xray")
 local has_chnlist = api.fs.access("/usr/share/passwall/rules/chnlist")
 
+local port_validate = function(self, value, t)
+	return value:gsub("-", ":")
+end
+
 m = Map(appname)
 api.set_apply_on_parse(m)
 
@@ -142,6 +146,7 @@ o.default = "default"
 o:value("disable", translate("No patterns are used"))
 o:value("default", translate("Default"))
 o:value("1:65535", translate("All"))
+o.validate = port_validate
 
 ---- UDP No Redir Ports
 o = s:option(Value, "udp_no_redir_ports", translate("UDP No Redir Ports"))
@@ -149,12 +154,14 @@ o.default = "default"
 o:value("disable", translate("No patterns are used"))
 o:value("default", translate("Default"))
 o:value("1:65535", translate("All"))
+o.validate = port_validate
 
 ---- TCP Proxy Drop Ports
 o = s:option(Value, "tcp_proxy_drop_ports", translate("TCP Proxy Drop Ports"))
 o.default = "default"
 o:value("disable", translate("No patterns are used"))
 o:value("default", translate("Default"))
+o.validate = port_validate
 
 ---- UDP Proxy Drop Ports
 o = s:option(Value, "udp_proxy_drop_ports", translate("UDP Proxy Drop Ports"))
@@ -162,6 +169,7 @@ o.default = "default"
 o:value("disable", translate("No patterns are used"))
 o:value("default", translate("Default"))
 o:value("80,443", translate("QUIC"))
+o.validate = port_validate
 
 ---- TCP Redir Ports
 o = s:option(Value, "tcp_redir_ports", translate("TCP Redir Ports"))
@@ -171,6 +179,7 @@ o:value("1:65535", translate("All"))
 o:value("80,443", "80,443")
 o:value("80:65535", "80 " .. translate("or more"))
 o:value("1:443", "443 " .. translate("or less"))
+o.validate = port_validate
 
 ---- UDP Redir Ports
 o = s:option(Value, "udp_redir_ports", translate("UDP Redir Ports"))
@@ -178,6 +187,7 @@ o.default = "default"
 o:value("default", translate("Default"))
 o:value("1:65535", translate("All"))
 o:value("53", "53")
+o.validate = port_validate
 
 ---- TCP Proxy Mode
 tcp_proxy_mode = s:option(ListValue, "tcp_proxy_mode", "TCP " .. translate("Proxy Mode"))
@@ -240,11 +250,31 @@ if has_xray then
 	o:value("xray", "Xray")
 end
 
-o = s:option(ListValue, "v2ray_dns_mode", " ")
+o = s:option(ListValue, "xray_dns_mode", " ")
+o:value("tcp", "TCP")
+o:value("tcp+doh", "TCP + DoH (" .. translate("A/AAAA type") .. ")")
+o:depends("dns_mode", "xray")
+o.cfgvalue = function(self, section)
+	return m:get(section, "v2ray_dns_mode")
+end
+o.write = function(self, section, value)
+	if s.fields["dns_mode"]:formvalue(section) == "xray" then
+		return m:set(section, "v2ray_dns_mode", value)
+	end
+end
+
+o = s:option(ListValue, "singbox_dns_mode", " ")
 o:value("tcp", "TCP")
 o:value("doh", "DoH")
 o:depends("dns_mode", "sing-box")
-o:depends("dns_mode", "xray")
+o.cfgvalue = function(self, section)
+	return m:get(section, "v2ray_dns_mode")
+end
+o.write = function(self, section, value)
+	if s.fields["dns_mode"]:formvalue(section) == "sing-box" then
+		return m:set(section, "v2ray_dns_mode", value)
+	end
+end
 
 ---- DNS Forward
 o = s:option(Value, "remote_dns", translate("Remote DNS"))
@@ -256,8 +286,10 @@ o:value("8.8.8.8", "8.8.8.8 (Google)")
 o:value("9.9.9.9", "9.9.9.9 (Quad9-Recommended)")
 o:value("208.67.220.220", "208.67.220.220 (OpenDNS)")
 o:value("208.67.222.222", "208.67.222.222 (OpenDNS)")
-o:depends("dns_mode", "dns2socks")
-o:depends("v2ray_dns_mode", "tcp")
+o:depends({dns_mode = "dns2socks"})
+o:depends({xray_dns_mode = "tcp"})
+o:depends({xray_dns_mode = "tcp+doh"})
+o:depends({singbox_dns_mode = "tcp"})
 
 if has_singbox or has_xray then
 	o = s:option(Value, "remote_dns_doh", translate("Remote DNS DoH"))
@@ -293,23 +325,36 @@ if has_singbox or has_xray then
 		end
 		return nil, translate("DoH request address") .. " " .. translate("Format must be:") .. " URL,IP"
 	end
-	o:depends("v2ray_dns_mode", "doh")
+	o:depends({xray_dns_mode = "tcp+doh"})
+	o:depends({singbox_dns_mode = "doh"})
 
 	if has_xray then
 		o = s:option(Value, "dns_client_ip", translate("EDNS Client Subnet"))
 		o.datatype = "ipaddr"
-		o:depends({dns_mode = "xray", v2ray_dns_mode = "tcp"})
-		o:depends({dns_mode = "xray", v2ray_dns_mode = "doh"})
+		o:depends({dns_mode = "xray"})
 	end
 end
 
 if api.is_finded("chinadns-ng") then
 	o = s:option(Flag, "chinadns_ng", translate("ChinaDNS-NG"), translate("The effect is better, but will increase the memory."))
 	o.default = "0"
-	o:depends({ tcp_proxy_mode = "gfwlist", dns_mode = "dns2socks"})
-	o:depends({ tcp_proxy_mode = "gfwlist", dns_mode = "xray"})
-	o:depends({ tcp_proxy_mode = "chnroute", dns_mode = "dns2socks"})
-	o:depends({ tcp_proxy_mode = "chnroute", dns_mode = "xray"})
+	o:depends({ tcp_proxy_mode = "gfwlist", dns_mode = "dns2socks" })
+	o:depends({ tcp_proxy_mode = "gfwlist", dns_mode = "xray" })
+	o:depends({ tcp_proxy_mode = "gfwlist", dns_mode = "sing-box" })
+	o:depends({ tcp_proxy_mode = "chnroute", dns_mode = "dns2socks" })
+	o:depends({ tcp_proxy_mode = "chnroute", dns_mode = "xray" })
+	o:depends({ tcp_proxy_mode = "chnroute", dns_mode = "sing-box" })
+	chinadns_ng_default_tag = s:option(ListValue, "chinadns_ng_default_tag", translate("ChinaDNS-NG Domain Default Tag"))
+	chinadns_ng_default_tag.default = "smart"
+	chinadns_ng_default_tag:value("smart", translate("Smart DNS"))
+	chinadns_ng_default_tag:value("gfw", translate("Remote DNS"))
+	chinadns_ng_default_tag:value("chn", translate("Direct DNS"))
+	chinadns_ng_default_tag.description = "<ul>"
+			.. "<li>" .. translate("Forward to both remote and direct DNS, if the direct DNS resolution result is a mainland China ip, then use the direct result, otherwise use the remote result") .. "</li>"
+			.. "<li>" .. translate("Remote DNS can avoid more DNS leaks, but some domestic domain names maybe to proxy!") .. "</li>"
+			.. "<li>" .. translate("Direct DNS Internet experience may be better, but DNS will be leaked!") .. "</li>"
+			.. "</ul>"
+	chinadns_ng_default_tag:depends("chinadns_ng", true)
 end
 
 if has_chnlist then
@@ -323,7 +368,8 @@ if has_chnlist then
 	.. "</ul>"
 	local _depends = {
 		{ dns_mode = "dns2socks" },
-		{ dns_mode = "xray" }
+		{ dns_mode = "xray" },
+		{ dns_mode = "sing-box" },
 	}
 	for i, d in ipairs(_depends) do
 		d["tcp_proxy_mode"] = "chnroute"

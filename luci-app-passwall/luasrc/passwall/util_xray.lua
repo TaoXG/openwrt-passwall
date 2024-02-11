@@ -510,12 +510,11 @@ end
 function gen_config(var)
 	local flag = var["-flag"]
 	local node_id = var["-node"]
+	local server_host = var["-server_host"]
+	local server_port = var["-server_port"]
 	local tcp_proxy_way = var["-tcp_proxy_way"] or "redirect"
 	local tcp_redir_port = var["-tcp_redir_port"]
 	local udp_redir_port = var["-udp_redir_port"]
-	local sniffing = var["-sniffing"]
-	local route_only = var["-route_only"]
-	local buffer_size = var["-buffer_size"]
 	local local_socks_address = var["-local_socks_address"] or "0.0.0.0"
 	local local_socks_port = var["-local_socks_port"]
 	local local_socks_username = var["-local_socks_username"]
@@ -544,10 +543,19 @@ function gen_config(var)
 	local inbounds = {}
 	local outbounds = {}
 
+	local xray_settings = uci:get_all(appname, "@global_xray[0]") or {}
+
 	if node_id then
 		local node = uci:get_all(appname, node_id)
+		if node then
+			if server_host and server_port then
+				node.address = server_host
+				node.port = server_port
+			end
+		end
 		if local_socks_port then
 			local inbound = {
+				tag = "socks-in",
 				listen = local_socks_address,
 				port = tonumber(local_socks_port),
 				protocol = "socks",
@@ -588,7 +596,13 @@ function gen_config(var)
 				protocol = "dokodemo-door",
 				settings = {network = "tcp,udp", followRedirect = true},
 				streamSettings = {sockopt = {tproxy = "tproxy"}},
-				sniffing = {enabled = sniffing and true or false, destOverride = {"http", "tls", "quic"}, metadataOnly = false, routeOnly = route_only and true or nil, domainsExcluded = (sniffing and not route_only) and get_domain_excluded() or nil}
+				sniffing = {
+					enabled = xray_settings.sniffing == "1" and true or false,
+					destOverride = {"http", "tls", "quic"},
+					metadataOnly = false,
+					routeOnly = (xray_settings.sniffing == "1" and xray_settings.route_only == "1") and true or nil,
+					domainsExcluded = (xray_settings.sniffing == "1" and xray_settings.route_only == "0") and get_domain_excluded() or nil
+				}
 			}
 
 			if tcp_redir_port then
@@ -865,39 +879,70 @@ function gen_config(var)
 							table.insert(protocols, w)
 						end)
 					end
+					local inboundTag = nil
+					if e["inbound"] and e["inbound"] ~= "" then
+						inboundTag = {}
+						if e["inbound"]:find("tproxy") then
+							if tcp_redir_port then
+								table.insert(inboundTag, "tcp_redir")
+							end
+							if udp_redir_port then
+								table.insert(inboundTag, "udp_redir")
+							end
+						end
+						if e["inbound"]:find("socks") then
+							if local_socks_port then
+								table.insert(inboundTag, "socks-in")
+							end
+						end
+					end
+					local domains = nil
 					if e.domain_list then
-						local _domain = {}
+						domains = {}
 						string.gsub(e.domain_list, '[^' .. "\r\n" .. ']+', function(w)
-							table.insert(_domain, w)
+							table.insert(domains, w)
 						end)
-						table.insert(rules, {
-							type = "field",
-							outboundTag = outboundTag,
-							balancerTag = balancerTag,
-							domain = _domain,
-							protocol = protocols
-						})
 					end
+					local ip = nil
 					if e.ip_list then
-						local _ip = {}
+						ip = {}
 						string.gsub(e.ip_list, '[^' .. "\r\n" .. ']+', function(w)
-							table.insert(_ip, w)
+							table.insert(ip, w)
 						end)
-						table.insert(rules, {
-							type = "field",
-							outboundTag = outboundTag,
-							balancerTag = balancerTag,
-							ip = _ip,
-							protocol = protocols
-						})
 					end
-					if not e.domain_list and not e.ip_list and protocols then
-						table.insert(rules, {
-							type = "field",
-							outboundTag = outboundTag,
-							balancerTag = balancerTag,
-							protocol = protocols
-						})
+					local source = nil
+					if e.source then
+						source = {}
+						string.gsub(e.source, '[^' .. " " .. ']+', function(w)
+							table.insert(source, w)
+						end)
+					end
+					local rule = {
+						_flag = e.remarks,
+						type = "field",
+						inboundTag = inboundTag,
+						outboundTag = outboundTag,
+						balancerTag = balancerTag,
+						network = e["network"] or "tcp,udp",
+						source = source,
+						sourcePort = nil,
+						port = e["port"] ~= "" and e["port"] or nil,
+						protocol = protocols
+					}
+					if domains then
+						local _rule = api.clone(rule)
+						_rule["_flag"] = _rule["_flag"] .. "_domains"
+						_rule.domains = domains
+						table.insert(rules, _rule)
+					end
+					if ip then
+						local _rule = api.clone(rule)
+						_rule["_flag"] = _rule["_flag"] .. "_ip"
+						_rule.ip = ip
+						table.insert(rules, _rule)
+					end
+					if not domains and not ip and protocols then
+						table.insert(rules, rule)
 					end
 				end
 			end)
@@ -1173,7 +1218,7 @@ function gen_config(var)
 						-- connIdle = 300,
 						-- uplinkOnly = 2,
 						-- downlinkOnly = 5,
-						bufferSize = buffer_size and tonumber(buffer_size) or nil,
+						bufferSize = xray_settings.buffer_size and tonumber(xray_settings.buffer_size) or nil,
 						statsUserUplink = false,
 						statsUserDownlink = false
 					}
