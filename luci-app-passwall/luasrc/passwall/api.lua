@@ -10,7 +10,7 @@ jsonc = require "luci.jsonc"
 i18n = require "luci.i18n"
 
 appname = "passwall"
-curl_args = { "-skfL", "--connect-timeout 3", "--retry 3", "-m 60" }
+curl_args = { "-skfL", "--connect-timeout 3", "--retry 3" }
 command_timeout = 300
 OPENWRT_ARCH = nil
 DISTRIB_ARCH = nil
@@ -820,7 +820,10 @@ function to_download(app_name, url, size)
 		end
 	end
 
-	local return_code, result = curl_logic(url, tmp_file, curl_args)
+	local _curl_args = clone(curl_args)
+	table.insert(_curl_args, "-m 60")
+
+	local return_code, result = curl_logic(url, tmp_file, _curl_args)
 	result = return_code == 0
 
 	if not result then
@@ -994,22 +997,6 @@ function to_check_self()
 		remote_version = remote_version,
 		error = i18n.translatef("The latest version: %s, currently does not support automatic update, if you need to update, please compile or download the ipk and then manually install.", remote_version)
 	}
-end
-
-function is_js_luci()
-	return sys.call('[ -f "/www/luci-static/resources/uci.js" ]') == 0
-end
-
-function set_apply_on_parse(map)
-	if is_js_luci() == true then
-		map.apply_on_parse = false
-		map.on_after_apply = function(self)
-			if self.redirect then
-				os.execute("sleep 1")
-				luci.http.redirect(self.redirect)
-			end
-		end
-	end
 end
 
 function luci_types(id, m, s, type_name, option_prefix)
